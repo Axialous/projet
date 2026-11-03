@@ -1,0 +1,17 @@
+services:
+    projet:
+        build:
+            context: ./projet
+        image: projet
+        container_name: projet
+        environment:
+            PORT: 3000
+        ports:
+            - "${PORT:-3000}:3000"
+        volumes:
+            # Montage du code pour le développement : modifier un fichier
+            # puis rafraîchir le navigateur suffit, le serveur redémarre seul.
+            - ./projet/jeu:/app/jeu:ro
+            - ./projet/serveur:/app/serveur:ro
+        command: ["node", "--watch", "serveur/serveur.js"]
+        restart: unless-stopped
