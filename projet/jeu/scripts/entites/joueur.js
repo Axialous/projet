@@ -1,7 +1,7 @@
 import { Entite } from './entite.js'
 import { borner } from '../utilitaires/maths.js'
 
-// Joueur de démonstration : se déplace avec les flèches ou ZQSD (WASD en QWERTY).
+// Joueur de démonstration : se déplace avec l'action « mouvement ».
 export class Joueur extends Entite {
     constructor(x, y) {
         super(x, y, 32, 32)
@@ -9,19 +9,12 @@ export class Joueur extends Entite {
     }
 
     mettre_a_jour(delta) {
-        const entrees = this.jeu.entrees
-        let dx = 0
-        let dy = 0
-        // KeyboardEvent.code désigne la position physique : 'KeyA' correspond à Q en AZERTY.
-        if (entrees.est_maintenue('ArrowLeft') || entrees.est_maintenue('KeyA')) dx -= 1
-        if (entrees.est_maintenue('ArrowRight') || entrees.est_maintenue('KeyD')) dx += 1
-        if (entrees.est_maintenue('ArrowUp') || entrees.est_maintenue('KeyW')) dy -= 1
-        if (entrees.est_maintenue('ArrowDown') || entrees.est_maintenue('KeyS')) dy += 1
-
-        // Normalise la diagonale pour garder la même vitesse.
-        const longueur = Math.hypot(dx, dy) || 1
-        this.vx = (dx / longueur) * this.vitesse
-        this.vy = (dy / longueur) * this.vitesse
+        // Manche gauche ou WASD (ZQSD en AZERTY). Le vecteur n'est pas normalisé :
+        // on borne sa longueur à 1 pour que la diagonale ne soit pas plus rapide.
+        const { x, y } = this.jeu.actions.valeur('mouvement')
+        const longueur = Math.max(1, Math.hypot(x, y))
+        this.vx = (x / longueur) * this.vitesse
+        this.vy = (y / longueur) * this.vitesse
 
         super.mettre_a_jour(delta)
 

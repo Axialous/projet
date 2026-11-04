@@ -1,11 +1,12 @@
 import { Entrees } from './entrees.js'
+import { GestionnaireEntrees } from './gestionnaire-entrees.js'
 import { GestionnaireScenes } from './gestionnaire-scenes.js'
 import { ChargeurRessources } from './chargeur-ressources.js'
 
 // Point central du jeu : possède la boucle, les entrées, les scènes et les ressources.
 // La logique tourne à pas fixe (déterministe), l'affichage à chaque image.
 export class Jeu {
-    constructor(ecran, configuration) {
+    constructor(ecran, configuration, configuration_entrees) {
         this.ecran = ecran
         this.contexte = ecran.getContext('2d')
         this.configuration = configuration
@@ -13,6 +14,7 @@ export class Jeu {
         this.hauteur = configuration.hauteur
 
         this.entrees = new Entrees(ecran)
+        this.actions = new GestionnaireEntrees(configuration_entrees)
         this.scenes = new GestionnaireScenes()
         this.ressources = new ChargeurRessources()
 
@@ -45,6 +47,7 @@ export class Jeu {
         const pas = this.configuration.pas_fixe
         this.accumulateur += delta
         while (this.accumulateur >= pas) {
+            this.actions.mettre_a_jour()
             this.scenes.mettre_a_jour(pas)
             this.entrees.terminer_mise_a_jour()
             this.accumulateur -= pas

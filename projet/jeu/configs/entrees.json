@@ -1,0 +1,55 @@
+{
+    "entrees": {
+        "manche_o": { "type": "vecteur", "entree": { "h": "controller.axis.0", "v": "controller.axis.1" } },
+        "manche_e": { "type": "vecteur", "entree": { "h": "controller.axis.2", "v": "controller.axis.3" } },
+
+        "bouton_action_n": { "type": "scalaire", "entree": "controller.button.3" },
+        "bouton_action_e": { "type": "scalaire", "entree": "controller.button.1" },
+        "bouton_action_s": { "type": "scalaire", "entree": "controller.button.0" },
+        "bouton_action_o": { "type": "scalaire", "entree": "controller.button.2" },
+
+        "gachette_o": { "type": "scalaire", "entree": "controller.button.6" },
+        "gachette_e": { "type": "scalaire", "entree": "controller.button.7" },
+
+        "bouton_arriere_o": { "type": "scalaire", "entree": "controller.button.4" },
+        "bouton_arriere_e": { "type": "scalaire", "entree": "controller.button.5" },
+
+        "bouton_affichage": { "type": "scalaire", "entree": "controller.button.8" },
+        "bouton_menu":      { "type": "scalaire", "entree": "controller.button.9" },
+
+        "bouton_manche_o": { "type": "scalaire", "entree": "controller.button.10" },
+        "bouton_manche_e": { "type": "scalaire", "entree": "controller.button.11" },
+
+        "bouton_fleche_n": { "type": "scalaire", "entree": "controller.button.12" },
+        "bouton_fleche_e": { "type": "scalaire", "entree": "controller.button.13" },
+        "bouton_fleche_s": { "type": "scalaire", "entree": "controller.button.14" },
+        "bouton_fleche_o": { "type": "scalaire", "entree": "controller.button.15" },
+
+        "touche_fleche_n": { "type": "scalaire", "entree": "keyboard.key.ArrowUp" },
+        "touche_fleche_e": { "type": "scalaire", "entree": "keyboard.key.ArrowRight" },
+        "touche_fleche_s": { "type": "scalaire", "entree": "keyboard.key.ArrowDown" },
+        "touche_fleche_o": { "type": "scalaire", "entree": "keyboard.key.ArrowLeft" },
+
+        "touche_q": { "type": "scalaire", "entree": "keyboard.key.KeyQ" },
+        "touche_e": { "type": "scalaire", "entree": "keyboard.key.KeyE" },
+
+        "touche_espace": { "type": "scalaire", "entree": "keyboard.key.Space" },
+        "touche_majuscule": { "type": "scalaire", "entree": "keyboard.key.ShiftLeft" },
+
+        "touches_fleches": {
+            "type": "vecteur",
+            "entree": { "n": "touche_fleche_n", "e": "touche_fleche_e", "s": "touche_fleche_s", "o": "touche_fleche_o" }
+        },
+        "touches_wasd": {
+            "type": "vecteur",
+            "entree": { "n": "keyboard.key.KeyW", "e": "keyboard.key.KeyD", "s": "keyboard.key.KeyS", "o": "keyboard.key.KeyA" }
+        }
+    },
+
+    "actions": {
+        "mouvement": { "entrees": ["manche_o", "touches_wasd"] },
+        "vue": { "entrees": ["manche_e", "touches_fleches"] },
+        "saut": { "entrees": ["bouton_action_s", "touche_espace"] },
+        "furtivite": { "entrees": ["bouton_action_e", "touche_majuscule"] }
+    }
+}

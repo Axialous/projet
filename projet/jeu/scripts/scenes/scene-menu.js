@@ -5,7 +5,7 @@ export class SceneMenu extends Scene {
     mettre_a_jour(delta) {
         super.mettre_a_jour(delta)
         const entrees = this.jeu.entrees
-        if (entrees.vient_d_etre_appuyee('Enter') || entrees.vient_d_etre_appuyee('Space') || entrees.souris.cliquee) {
+        if (entrees.vient_d_etre_appuyee('Enter') || entrees.souris.cliquee || this.jeu.actions.vient_d_etre_activee('saut')) {
             this.jeu.scenes.changer(new ScenePartie(this.jeu))
         }
     }
