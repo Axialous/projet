@@ -25,6 +25,8 @@
         "bouton_fleche_s": { "type": "scalaire", "entree": "controller.button.14" },
         "bouton_fleche_o": { "type": "scalaire", "entree": "controller.button.15" },
 
+        "boutons_fleches": { "type": "vecteur", "entree": { "n": "bouton_fleche_n", "e": "bouton_fleche_e", "s": "bouton_fleche_s", "o": "bouton_fleche_o" } },
+
         "touche_fleche_n": { "type": "scalaire", "entree": "keyboard.key.ArrowUp" },
         "touche_fleche_e": { "type": "scalaire", "entree": "keyboard.key.ArrowRight" },
         "touche_fleche_s": { "type": "scalaire", "entree": "keyboard.key.ArrowDown" },
@@ -36,19 +38,31 @@
         "touche_espace": { "type": "scalaire", "entree": "keyboard.key.Space" },
         "touche_majuscule": { "type": "scalaire", "entree": "keyboard.key.ShiftLeft" },
 
-        "touches_fleches": {
-            "type": "vecteur",
-            "entree": { "n": "touche_fleche_n", "e": "touche_fleche_e", "s": "touche_fleche_s", "o": "touche_fleche_o" }
-        },
-        "touches_wasd": {
-            "type": "vecteur",
-            "entree": { "n": "keyboard.key.KeyW", "e": "keyboard.key.KeyD", "s": "keyboard.key.KeyS", "o": "keyboard.key.KeyA" }
-        }
+        "touche_enter": { "type": "scalaire", "entree": "keyboard.key.Enter" },
+        "touche_echap": { "type": "scalaire", "entree": "keyboard.key.Escape" },
+
+        "touches_fleches": { "type": "vecteur", "entree": { "n": "touche_fleche_n", "e": "touche_fleche_e", "s": "touche_fleche_s", "o": "touche_fleche_o" } },
+        "touches_wasd": { "type": "vecteur", "entree": { "n": "keyboard.key.KeyW", "e": "keyboard.key.KeyD", "s": "keyboard.key.KeyS", "o": "keyboard.key.KeyA" } },
+
+        "clic_gauche": { "type": "scalaire", "entree": "mouse.button.0" },
+        "clic_droit": { "type": "scalaire", "entree": "mouse.button.2" },
+        "molette": { "type": "vecteur", "entree": { "h": "mouse.wheel.x", "v": "mouse.wheel.y" } },
+        "mouvement_souris": { "type": "vecteur", "entree": { "h": "mouse.motion.x", "v": "mouse.motion.y" } },
+        "position_souris": { "type": "position", "entree": "mouse.pointer.position" }
     },
 
     "actions": {
+        "navigation": { "entrees": ["manche_o", "boutons_fleches", "touches_fleches", "touches_wasd", "molette"] },
+        "validation": { "entrees": ["bouton_action_s", "touche_espace", "touche_enter"] },
+        "annulation": { "entrees": ["bouton_action_e", "touche_majuscule", "touche_echap", "clic_droit"] },
+
+        "pointeur": { "entrees": ["position_souris"] },
+        "clic": { "entrees": ["clic_gauche"] },
+
+        "menu": { "entrees": ["bouton_menu", "touche_echap"] },
+
         "mouvement": { "entrees": ["manche_o", "touches_wasd"] },
-        "vue": { "entrees": ["manche_e", "touches_fleches"] },
+        "vue": { "entrees": ["manche_e", "touches_fleches", "mouvement_souris"] },
         "saut": { "entrees": ["bouton_action_s", "touche_espace"] },
         "furtivite": { "entrees": ["bouton_action_e", "touche_majuscule"] }
     }

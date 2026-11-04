@@ -1,9 +1,10 @@
-import { Entrees } from './entrees.js'
 import { GestionnaireEntrees } from './gestionnaire-entrees.js'
 import { GestionnaireScenes } from './gestionnaire-scenes.js'
 import { ChargeurRessources } from './chargeur-ressources.js'
+import { GestionnaireSauvegardes } from './gestionnaire-sauvegardes.js'
+import { StockageLocal } from './stockage-local.js'
 
-// Point central du jeu : possède la boucle, les entrées, les scènes et les ressources.
+// Point central du jeu : possède la boucle, les entrées, les scènes, les ressources et les sauvegardes.
 // La logique tourne à pas fixe (déterministe), l'affichage à chaque image.
 export class Jeu {
     constructor(ecran, configuration, configuration_entrees) {
@@ -13,10 +14,10 @@ export class Jeu {
         this.largeur = configuration.largeur
         this.hauteur = configuration.hauteur
 
-        this.entrees = new Entrees(ecran)
-        this.actions = new GestionnaireEntrees(configuration_entrees)
+        this.actions = new GestionnaireEntrees(configuration_entrees, { ecran })
         this.scenes = new GestionnaireScenes()
         this.ressources = new ChargeurRessources()
+        this.sauvegardes = new GestionnaireSauvegardes(new StockageLocal(configuration.prefixe_stockage))
 
         this.en_cours = false
         this.accumulateur = 0
@@ -47,9 +48,8 @@ export class Jeu {
         const pas = this.configuration.pas_fixe
         this.accumulateur += delta
         while (this.accumulateur >= pas) {
-            this.actions.mettre_a_jour()
+            this.actions.mettre_a_jour(pas)
             this.scenes.mettre_a_jour(pas)
-            this.entrees.terminer_mise_a_jour()
             this.accumulateur -= pas
         }
 

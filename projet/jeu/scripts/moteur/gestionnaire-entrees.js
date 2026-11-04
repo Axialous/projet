@@ -1,30 +1,45 @@
 import { Clavier } from './peripheriques/clavier.js'
 import { Manette } from './peripheriques/manette.js'
+import { Souris } from './peripheriques/souris.js'
 import { borner } from '../utilitaires/maths.js'
 
 // Gestionnaire d'entrées et d'actions : fait abstraction des périphériques physiques.
 // Trois niveaux séparés :
 // - entrées physiques : lues par les périphériques (domaines) ;
+//   keyboard.key.<code>, controller.axis.<n>, controller.button.<n>, mouse.button.<n>,
+//   mouse.wheel.x|y, mouse.motion.x|y (vitesse non bornée), mouse.pointer.position (position) ;
 // - entrées composées : section « entrees » de la configuration (jeu/configs/entrees.json) ;
 //     scalaire : "domaine.sous_domaine.id", nom d'entrée, ou { n, s }   → n - s
 //     vecteur  : nom d'entrée, { h, v } ou { n, e, s, o }              → { x: e - o, y: s - n }
+//     position : "domaine.sous_domaine.id" ou nom d'entrée, sans composition → { x, y } ou null
 //   Les vecteurs suivent la convention de l'écran et des manettes : y positif vers le bas.
 //   Zones mortes des entrées analogiques : sur la longueur du vecteur pour une composition
-//   { h, v } (la direction du manche est conservée), axe par axe dans les autres cas.
+//   { h, v } d'entrées analogiques (la direction du manche est conservée), axe par axe sinon.
 // - actions : section « actions », liste d'entrées nommées ou physiques, toutes du même type.
+//   Scalaires et vecteurs : la plus grande valeur absolue l'emporte (composante par composante).
+//   Positions : la première disponible dans l'ordre de la liste ; l'action est active tant
+//   qu'une position est disponible (pointeur sur l'écran).
 //
-// Utilisation (appeler mettre_a_jour() au début de chaque mise à jour logique) :
+// Utilisation (appeler mettre_a_jour(delta) au début de chaque mise à jour logique) :
 //   actions.valeur('mouvement')            → { x, y }, composantes entre -1 et 1
+//                                            (sauf mouse.motion, non borné)
 //   actions.valeur('saut')                 → nombre
+//   actions.valeur('pointeur')             → { x, y } en coordonnées du jeu, ou null
 //   actions.est_active('saut')             → valeur non nulle
 //   actions.vient_d_etre_activee('saut')
 //   actions.vient_d_etre_relachee('saut')
 //   actions.dernier_peripherique           → { type, nom, famille } ou null
 //   actions.libelles('saut')               → ['Espace'] ou ['A'] selon le dernier périphérique
+//   actions.verrouiller_pointeur(), actions.liberer_pointeur(), actions.pointeur_verrouille
 
 const OPTIONS_PAR_DEFAUT = {
     // Part de la course ignorée près du repos, pour les entrées analogiques.
     zone_morte: 0.15,
+    // Vitesse de mouse.motion par pixel parcouru : 1 pixel équivaut à un manche poussé
+    // à fond pendant 0,002 s (500 pixels → 1 s).
+    sensibilite_souris: 0.002,
+    // Écran (canvas) dont la souris suit le pointeur.
+    ecran: null,
 }
 
 // Ramène |valeur| de [zone_morte, 1] à [0, 1] : valeur neutre dans la zone morte,
@@ -46,11 +61,12 @@ function appliquer_zone_morte_radiale(vecteur, zone_morte) {
     return { x: vecteur.x * facteur, y: vecteur.y * facteur }
 }
 
-const TYPES = ['scalaire', 'vecteur']
+const TYPES = ['scalaire', 'vecteur', 'position']
 
 const NEUTRES = {
     scalaire: () => 0,
     vecteur: () => ({ x: 0, y: 0 }),
+    position: () => null,
 }
 
 // Plus grande valeur absolue ; en cas d'égalité, la première de la liste l'emporte.
@@ -60,6 +76,7 @@ const plus_grande = (valeurs) => valeurs.reduce((retenue, valeur) => (Math.abs(v
 // Vecteurs : comparaison indépendante sur chaque composante, sans normalisation.
 function fusionner(valeurs, type) {
     const disponibles = valeurs.filter((valeur) => valeur !== null)
+    if (type === 'position') return disponibles[0] ?? null
     if (type === 'scalaire') return plus_grande(disponibles)
     return {
         x: plus_grande(disponibles.map((valeur) => valeur.x)),
@@ -76,17 +93,23 @@ function combiner(lecteurs, calculer) {
 
 const difference = (positive, negative) => borner(positive - negative, -1, 1)
 
-const est_non_nulle = (valeur, type) => (type === 'vecteur' ? valeur.x !== 0 || valeur.y !== 0 : valeur !== 0)
+function est_non_nulle(valeur, type) {
+    if (type === 'position') return valeur !== null
+    if (type === 'vecteur') return valeur.x !== 0 || valeur.y !== 0
+    return valeur !== 0
+}
 
 export class GestionnaireEntrees {
     constructor(configuration, options = {}) {
         this.options = { ...OPTIONS_PAR_DEFAUT, ...options }
 
         // Domaines physiques : ajouter ici un périphérique pour prendre en charge un nouveau domaine.
-        // Chacun fournit type, lecteur(sous_domaine, id), echantillonner() et libelle(sous_domaine, id).
+        // Chacun fournit type, lecteur(sous_domaine, id), echantillonner(delta) et libelle(sous_domaine, id).
+        // lecteur() renvoie { lire, analogique, type? } (type « scalaire » par défaut).
         this.domaines = {
             keyboard: new Clavier(this.options),
             controller: new Manette(),
+            mouse: new Souris(this.options.ecran, this.options),
         }
         this.dernier_peripherique = null
 
@@ -102,8 +125,8 @@ export class GestionnaireEntrees {
     }
 
     // --- Compilation de la configuration ---
-    // Chaque entrée devient { type, evaluer, brut, sources } : evaluer() renvoie la valeur
-    // après zone morte (null si indisponible), brut() la valeur avant zone morte,
+    // Chaque entrée devient { type, evaluer, brut, sources, analogique } : evaluer() renvoie
+    // la valeur après zone morte (null si indisponible), brut() la valeur avant zone morte,
     // sources liste les entrées physiques d'origine.
 
     compiler_entree(nom, pile) {
@@ -117,7 +140,8 @@ export class GestionnaireEntrees {
             throw new Error(`Entrée « ${nom} » : type « ${definition?.type} » invalide (attendu : ${TYPES.join(' ou ')})`)
         }
         const noeud = this.compiler_reference(definition.entree, definition.type, [...pile, nom])
-        const entree = { nom, type: definition.type, evaluer: noeud.evaluer, brut: noeud.brut, sources: noeud.sources }
+        const { evaluer, brut, sources, analogique } = noeud
+        const entree = { nom, type: definition.type, evaluer, brut, sources, analogique }
         this.entrees_compilees.set(nom, entree)
         return entree
     }
@@ -133,14 +157,17 @@ export class GestionnaireEntrees {
                 }
                 return entree
             }
-            if (type !== 'scalaire') {
+            if (type === 'vecteur') {
                 throw new Error(`${contexte} : « ${reference} » n'est pas une entrée vecteur définie`)
             }
-            return this.compiler_physique(reference, contexte)
+            return this.compiler_physique(reference, contexte, type)
         }
 
         if (reference === null || typeof reference !== 'object' || Array.isArray(reference)) {
             throw new Error(`${contexte} : champ « entree » invalide`)
+        }
+        if (type === 'position') {
+            throw new Error(`${contexte} : une position ne se compose pas (entrée physique ou nommée attendue)`)
         }
 
         const cles = Object.keys(reference).sort().join(',')
@@ -157,19 +184,23 @@ export class GestionnaireEntrees {
         const sources = Object.values(composantes).flatMap((composante) => composante.sources)
         const { n, e, s, o, h, v } = composantes
 
-        if (cles === 'h,v') {
+        if (cles === 'h,v' && h.analogique && v.analogique) {
             // Zone morte sur la longueur : les composantes sont lues avant leur propre zone morte.
             const brut = () => combiner([h.brut, v.brut], (x, y) => ({ x, y }))
-            return { sources, brut, evaluer: () => appliquer_zone_morte_radiale(brut(), this.options.zone_morte) }
+            return { sources, brut, evaluer: () => appliquer_zone_morte_radiale(brut(), this.options.zone_morte), analogique: true }
         }
-        const evaluer = cles === 'n,s'
-            ? () => combiner([n.evaluer, s.evaluer], difference)
-            : () => combiner([n.evaluer, e.evaluer, s.evaluer, o.evaluer],
-                (vn, ve, vs, vo) => ({ x: difference(ve, vo), y: difference(vs, vn) }))
-        return { sources, evaluer, brut: evaluer }
+        // Composantes non analogiques (souris…) : ni zone morte, ni bornage.
+        const evaluer = cles === 'h,v'
+            ? () => combiner([h.evaluer, v.evaluer], (x, y) => ({ x, y }))
+            : cles === 'n,s'
+                ? () => combiner([n.evaluer, s.evaluer], difference)
+                : () => combiner([n.evaluer, e.evaluer, s.evaluer, o.evaluer],
+                    (vn, ve, vs, vo) => ({ x: difference(ve, vo), y: difference(vs, vn) }))
+        return { sources, evaluer, brut: evaluer, analogique: false }
     }
 
-    compiler_physique(chemin, contexte) {
+    // type_attendu : type que l'entrée physique doit avoir (null : tout type accepté).
+    compiler_physique(chemin, contexte, type_attendu = null) {
         const [nom_domaine, sous_domaine, identifiant, ...reste] = chemin.split('.')
         const domaine = Object.hasOwn(this.domaines, nom_domaine) ? this.domaines[nom_domaine] : null
         if (!domaine) {
@@ -181,8 +212,12 @@ export class GestionnaireEntrees {
             throw new Error(`${contexte} : entrée physique « ${chemin} » invalide (sous-domaine ou identifiant inconnu)`)
         }
         const { lire, analogique } = lecteur
+        const type = lecteur.type ?? 'scalaire'
+        if (type_attendu && type !== type_attendu) {
+            throw new Error(`${contexte} : « ${chemin} » est de type ${type}, ${type_attendu} attendu`)
+        }
         const evaluer = analogique ? () => appliquer_zone_morte_axiale(lire(), this.options.zone_morte) : lire
-        return { sources: [chemin], evaluer, brut: lire }
+        return { type, sources: [chemin], evaluer, brut: lire, analogique }
     }
 
     compiler_action(nom, definition) {
@@ -192,11 +227,11 @@ export class GestionnaireEntrees {
             throw new Error(`${contexte} : « entrees » doit être une liste non vide`)
         }
 
-        // Entrée nommée, ou référence physique directe (scalaire).
+        // Entrée nommée, ou référence physique directe (scalaire ou position).
         const entrees = references.map((reference) => {
             if (typeof reference !== 'string') throw new Error(`${contexte} : référence d'entrée invalide`)
             if (Object.hasOwn(this.definitions, reference)) return this.compiler_entree(reference, [])
-            return { nom: reference, type: 'scalaire', ...this.compiler_physique(reference, contexte) }
+            return { nom: reference, ...this.compiler_physique(reference, contexte) }
         })
 
         const type = entrees[0].type
@@ -217,10 +252,10 @@ export class GestionnaireEntrees {
 
     // --- Mise à jour ---
 
-    // À appeler une fois au début de chaque mise à jour logique.
-    mettre_a_jour() {
+    // À appeler une fois au début de chaque mise à jour logique (delta : sa durée, en secondes).
+    mettre_a_jour(delta = 0) {
         for (const domaine of Object.values(this.domaines)) {
-            const utilise = domaine.echantillonner()
+            const utilise = domaine.echantillonner(delta)
             if (utilise) this.dernier_peripherique = utilise
         }
 
@@ -244,7 +279,7 @@ export class GestionnaireEntrees {
     // Valeur précise, accessible indépendamment de l'état actif.
     valeur(nom) {
         const { valeur } = this.etat(nom)
-        return typeof valeur === 'number' ? valeur : { ...valeur }
+        return valeur === null || typeof valeur === 'number' ? valeur : { ...valeur }
     }
 
     est_active(nom) {
@@ -263,7 +298,7 @@ export class GestionnaireEntrees {
 
     // Entrées physiques d'origine associées à une action, pour un type de périphérique donné
     // (par défaut le dernier utilisé).
-    sources(nom, type = this.dernier_peripherique?.type ?? 'clavier') {
+    sources(nom, type = this.dernier_peripherique?.type ?? 'clavier_souris') {
         const sources = this.etat(nom).entrees.flatMap((entree) => entree.sources)
         return [...new Set(sources)].filter((chemin) => this.domaines[chemin.split('.')[0]].type === type)
     }
@@ -276,5 +311,20 @@ export class GestionnaireEntrees {
             return this.domaines[nom_domaine].libelle(sous_domaine, identifiant)
         })
         return [...new Set(libelles)]
+    }
+
+    // --- Verrouillage du pointeur ---
+
+    // À appeler peu après un geste de l'utilisateur (clic…), sinon le navigateur refuse.
+    verrouiller_pointeur() {
+        this.domaines.mouse.verrouiller()
+    }
+
+    liberer_pointeur() {
+        this.domaines.mouse.liberer()
+    }
+
+    get pointeur_verrouille() {
+        return this.domaines.mouse.est_verrouillee
     }
 }

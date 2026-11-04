@@ -22,7 +22,8 @@ const LIBELLES_TOUCHES = {
 // QWERTY ('KeyW' correspond à la touche Z en AZERTY).
 export class Clavier {
     constructor() {
-        this.type = 'clavier'
+        // Même type que la souris : les indications mélangent touches et boutons de souris.
+        this.type = 'clavier_souris'
         this.maintenues = new Set()
         // Touches appuyées depuis le dernier échantillonnage : un appui bref,
         // relâché avant la mise à jour suivante, reste ainsi visible une fois.

@@ -22,6 +22,17 @@ export class Joueur extends Entite {
         this.y = borner(this.y, 0, this.jeu.hauteur - this.hauteur)
     }
 
+    serialiser() {
+        return { x: this.x, y: this.y }
+    }
+
+    restaurer(donnees) {
+        const { x, y } = donnees ?? {}
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('position du joueur invalide')
+        this.x = x
+        this.y = y
+    }
+
     dessiner(contexte) {
         contexte.fillStyle = '#4af'
         contexte.fillRect(this.x, this.y, this.largeur, this.hauteur)
