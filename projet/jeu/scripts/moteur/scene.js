@@ -18,12 +18,19 @@ export class Scene {
         return entite
     }
 
+    // Appelé avant chaque simulation : retient l'état à partir duquel l'affichage interpole.
+    // Surchargez-le pour y ajouter ce qui s'interpole hors des entités (caméra…).
+    memoriser_etat() {
+        for (const entite of this.entites) entite.memoriser_etat()
+    }
+
     mettre_a_jour(delta) {
         for (const entite of this.entites) entite.mettre_a_jour(delta)
         this.entites = this.entites.filter((entite) => !entite.detruite)
     }
 
-    dessiner(contexte) {
-        for (const entite of this.entites) entite.dessiner(contexte)
+    // avancement : de 0 (état de la simulation précédente) à 1 (dernière simulation).
+    dessiner(contexte, avancement) {
+        for (const entite of this.entites) entite.dessiner(contexte, avancement)
     }
 }

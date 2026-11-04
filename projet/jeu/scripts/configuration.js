@@ -2,8 +2,9 @@
 export const CONFIGURATION = {
     largeur: 800,
     hauteur: 600,
-    // Pas de temps fixe pour la logique (60 mises à jour par seconde).
-    pas_fixe: 1 / 60,
+    // Fréquence de la simulation (logique du jeu), indépendante de celle de l'affichage :
+    // l'affichage interpole entre les deux dernières simulations.
+    simulations_par_seconde: 16,
     debogage: true,
     // Préfixe des clés du stockage local, pour ne pas mélanger les données de plusieurs jeux
     // servis depuis la même adresse.

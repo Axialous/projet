@@ -3,6 +3,8 @@ import { Menu } from '../interface/menu.js'
 import { Joueur } from '../entites/joueur.js'
 import { generer_graine, formater_graine } from '../utilitaires/graine.js'
 import { Hasard } from '../utilitaires/hasard.js'
+import { generer_carte, position_depart } from '../monde/generateur-carte.js'
+import { Camera } from '../monde/camera.js'
 // Import circulaire (menu <-> partie) sans risque : SceneMenu n'est utilisé qu'à l'exécution.
 import { SceneMenu } from './scene-menu.js'
 
@@ -21,8 +23,10 @@ export class ScenePartie extends Scene {
     async entrer() {
         // Chargez ici les ressources du niveau, par exemple :
         // await this.jeu.ressources.charger_texture('joueur', '/textures/joueur.png')
-        const { largeur, hauteur } = this.jeu
-        this.joueur = this.ajouter(new Joueur(largeur / 2 - 16, hauteur / 2 - 16))
+        // Placé une fois la carte générée, ou restauré depuis la sauvegarde.
+        this.joueur = this.ajouter(new Joueur(0, 0))
+        this.carte = null
+        this.camera = null
         // Menu de la partie : ouvert, il met la partie en pause.
         this.menu = null
         this.notification = null
@@ -45,9 +49,25 @@ export class ScenePartie extends Scene {
             this.id_sauvegarde = this.sauvegarde.id
             this.sauvegarde = null
         } else {
+            this.creer_monde(this.graine)
+            this.placer_joueur_au_depart()
+            this.camera.suivre(this.joueur, true)
             // Sauvegarde initiale : la partie apparaît aussitôt dans « Charger une partie ».
             await this.sauvegarder()
         }
+    }
+
+    // La carte ne dépend que de la graine : elle n'est pas sauvegardée mais régénérée.
+    // Son flux est tiré d'un Hasard neuf, pour ne pas dépendre de l'état restauré.
+    // La caméra précalcule, pour toute la carte, jusqu'où elle peut dézoomer.
+    creer_monde(graine) {
+        this.carte = generer_carte(new Hasard(graine).flux('carte'))
+        this.camera = new Camera(this.carte, this.jeu.largeur, this.jeu.hauteur, this.joueur.largeur, this.joueur.hauteur)
+    }
+
+    placer_joueur_au_depart() {
+        const { x, y } = position_depart(this.carte, this.joueur.largeur, this.joueur.hauteur)
+        this.joueur.placer(x, y)
     }
 
     // --- Sauvegarde ---
@@ -67,7 +87,11 @@ export class ScenePartie extends Scene {
         this.graine = donnees.graine
         if (!Number.isFinite(donnees.duree_jeu)) throw new Error('durée de jeu invalide')
         this.duree_jeu = donnees.duree_jeu
+        this.creer_monde(this.graine)
         this.joueur.restaurer(donnees.joueur)
+        // Sauvegarde d'une version précédente de la carte : le joueur serait dans un mur.
+        if (this.carte.touche_mur(this.joueur)) this.placer_joueur_au_depart()
+        this.camera.suivre(this.joueur, true)
     }
 
     // L'état est figé au moment de l'appel, même si l'écriture attend la précédente.
@@ -93,6 +117,11 @@ export class ScenePartie extends Scene {
 
     // --- Mise à jour ---
 
+    memoriser_etat() {
+        super.memoriser_etat()
+        this.camera.memoriser_etat()
+    }
+
     mettre_a_jour(delta) {
         if (this.notification) {
             this.notification.restant -= delta
@@ -115,6 +144,7 @@ export class ScenePartie extends Scene {
             if (actions.vient_d_etre_activee('clic') && !verrouille) actions.verrouiller_pointeur()
             this.duree_jeu += delta
             super.mettre_a_jour(delta)
+            this.camera.suivre(this.joueur)
             return
         }
 
@@ -168,10 +198,20 @@ export class ScenePartie extends Scene {
 
     // --- Affichage ---
 
-    dessiner(contexte) {
-        contexte.fillStyle = '#222'
-        contexte.fillRect(0, 0, this.jeu.largeur, this.jeu.hauteur)
-        super.dessiner(contexte)
+    dessiner(contexte, avancement) {
+        const { largeur, hauteur } = this.jeu
+        // Fond : la masse des murs.
+        contexte.fillStyle = '#16161c'
+        contexte.fillRect(0, 0, largeur, hauteur)
+
+        // Monde : la carte se dessine en pixels de l'écran, les entités en pixels de
+        // la carte, mis à l'échelle de la vue.
+        const vue = this.camera.vue_affichee(avancement)
+        this.carte.dessiner(contexte, vue)
+        contexte.save()
+        contexte.setTransform(vue.zoom, 0, 0, vue.zoom, -vue.x * vue.zoom, -vue.y * vue.zoom)
+        super.dessiner(contexte, avancement)
+        contexte.restore()
 
         contexte.font = '14px monospace'
         contexte.textAlign = 'right'
@@ -187,7 +227,9 @@ export class ScenePartie extends Scene {
 
         if (this.notification) {
             const { texte, erreur, restant } = this.notification
-            contexte.globalAlpha = Math.min(1, restant / 0.5)
+            // Fondu continu entre deux simulations.
+            const restant_affiche = restant - avancement * this.jeu.pas
+            contexte.globalAlpha = Math.max(0, Math.min(1, restant_affiche / 0.5))
             contexte.font = '16px sans-serif'
             contexte.textAlign = 'right'
             contexte.textBaseline = 'bottom'

@@ -5,7 +5,8 @@ import { GestionnaireSauvegardes } from './gestionnaire-sauvegardes.js'
 import { StockageLocal } from './stockage-local.js'
 
 // Point central du jeu : possède la boucle, les entrées, les scènes, les ressources et les sauvegardes.
-// La logique tourne à pas fixe (déterministe), l'affichage à chaque image.
+// La logique tourne à pas fixe (déterministe), à configuration.simulations_par_seconde ;
+// l'affichage, à chaque image, interpole entre les deux dernières simulations.
 export class Jeu {
     constructor(ecran, configuration, configuration_entrees) {
         this.ecran = ecran
@@ -13,6 +14,8 @@ export class Jeu {
         this.configuration = configuration
         this.largeur = configuration.largeur
         this.hauteur = configuration.hauteur
+        // Durée d'une simulation (secondes).
+        this.pas = 1 / configuration.simulations_par_seconde
 
         this.actions = new GestionnaireEntrees(configuration_entrees, { ecran })
         this.scenes = new GestionnaireScenes()
@@ -45,7 +48,7 @@ export class Jeu {
         this.instant_precedent = instant
         this.ips = delta > 0 ? 1 / delta : 0
 
-        const pas = this.configuration.pas_fixe
+        const pas = this.pas
         this.accumulateur += delta
         while (this.accumulateur >= pas) {
             this.actions.mettre_a_jour(pas)
@@ -53,8 +56,11 @@ export class Jeu {
             this.accumulateur -= pas
         }
 
+        // Avancement (entre 0 et 1) vers la prochaine simulation : l'affichage montre
+        // l'état interpolé entre la simulation précédente et la dernière, avec un pas de retard.
+        const avancement = this.accumulateur / pas
         this.contexte.clearRect(0, 0, this.largeur, this.hauteur)
-        this.scenes.dessiner(this.contexte)
+        this.scenes.dessiner(this.contexte, avancement)
         if (this.configuration.debogage) this.dessiner_debogage()
 
         requestAnimationFrame(this.boucle)
@@ -67,5 +73,6 @@ export class Jeu {
         contexte.textAlign = 'left'
         contexte.textBaseline = 'top'
         contexte.fillText(`IPS : ${Math.round(this.ips)}`, 8, 8)
+        contexte.fillText(`Simulations : ${this.configuration.simulations_par_seconde}/s`, 8, 22)
     }
 }

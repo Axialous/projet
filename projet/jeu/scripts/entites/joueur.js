@@ -1,11 +1,12 @@
 import { Entite } from './entite.js'
-import { borner } from '../utilitaires/maths.js'
 
-// Joueur de démonstration : se déplace avec l'action « mouvement ».
+// Joueur de démonstration : se déplace avec l'action « mouvement », bloqué par les
+// murs de la carte de la scène.
 export class Joueur extends Entite {
     constructor(x, y) {
-        super(x, y, 32, 32)
-        this.vitesse = 250 // pixels par seconde
+        // Plus petit qu'une tuile, pour passer dans les couloirs sans se coincer.
+        super(x, y, 24, 24)
+        this.vitesse = 100 // pixels par seconde (lent, pour tester la caméra)
     }
 
     mettre_a_jour(delta) {
@@ -16,10 +17,7 @@ export class Joueur extends Entite {
         this.vx = (x / longueur) * this.vitesse
         this.vy = (y / longueur) * this.vitesse
 
-        super.mettre_a_jour(delta)
-
-        this.x = borner(this.x, 0, this.jeu.largeur - this.largeur)
-        this.y = borner(this.y, 0, this.jeu.hauteur - this.hauteur)
+        this.scene.carte.deplacer(this, this.vx * delta, this.vy * delta)
     }
 
     serialiser() {
@@ -29,12 +27,12 @@ export class Joueur extends Entite {
     restaurer(donnees) {
         const { x, y } = donnees ?? {}
         if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('position du joueur invalide')
-        this.x = x
-        this.y = y
+        this.placer(x, y)
     }
 
-    dessiner(contexte) {
+    dessiner(contexte, avancement) {
+        const { x, y } = this.position_affichee(avancement)
         contexte.fillStyle = '#4af'
-        contexte.fillRect(this.x, this.y, this.largeur, this.hauteur)
+        contexte.fillRect(x, y, this.largeur, this.hauteur)
     }
 }

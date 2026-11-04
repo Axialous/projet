@@ -62,8 +62,8 @@ export class SceneMenu extends Scene {
         this.menu.mettre_a_jour(delta)
     }
 
-    dessiner(contexte) {
-        super.dessiner(contexte)
+    dessiner(contexte, avancement) {
+        super.dessiner(contexte, avancement)
         this.menu.dessiner(contexte)
     }
 }

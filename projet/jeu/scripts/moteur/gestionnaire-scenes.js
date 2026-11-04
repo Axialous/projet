@@ -19,11 +19,16 @@ export class GestionnaireScenes {
         this.actuelle = scene
     }
 
+    // L'état est mémorisé à chaque simulation, même quand la scène ne change rien (pause) :
+    // l'affichage interpole alors entre deux états identiques, sans trembler.
     mettre_a_jour(delta) {
-        if (!this.en_transition) this.actuelle?.mettre_a_jour(delta)
+        if (this.en_transition || !this.actuelle) return
+        this.actuelle.memoriser_etat()
+        this.actuelle.mettre_a_jour(delta)
     }
 
-    dessiner(contexte) {
-        this.actuelle?.dessiner(contexte)
+    // Pendant une transition, la scène n'est plus simulée : elle est figée sur son dernier état.
+    dessiner(contexte, avancement = 1) {
+        this.actuelle?.dessiner(contexte, this.en_transition ? 1 : avancement)
     }
 }
