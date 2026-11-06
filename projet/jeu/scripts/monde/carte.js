@@ -15,6 +15,17 @@ const COULEURS = {
     bordure: '#5a5a6a',
 }
 
+// Couleurs de test : chaque pièce et chaque couloir a sa teinte, pour voir la lumière
+// ambiante changer d'une zone à l'autre. false : le sol gris d'origine partout.
+const SOLS_COLORES = true
+
+// Couleurs de sol (normale, alternée du damier) de la zone d'indice donné (à partir de 1).
+// Teintes espacées de l'angle d'or, pour que des zones d'indices voisins se distinguent.
+function couleurs_zone(zone) {
+    const teinte = Math.round((zone * 137.508) % 360)
+    return [`hsl(${teinte}, 55%, 34%)`, `hsl(${teinte}, 55%, 40%)`]
+}
+
 export class Carte {
     // largeur et hauteur en tuiles. La carte commence entièrement en murs.
     constructor(largeur, hauteur) {
@@ -23,6 +34,11 @@ export class Carte {
         this.tuiles = new Uint8Array(largeur * hauteur).fill(TUILES.MUR)
         // Pièces { x, y, largeur, hauteur } en tuiles, renseignées par le générateur.
         this.pieces = []
+        // Zone (pièce ou couloir) de chaque tuile de sol : indice à partir de 1, 0 pour
+        // aucune. Renseignées par le générateur.
+        this.zones = new Uint16Array(largeur * hauteur)
+        // Couleurs de sol déjà calculées, par indice de zone.
+        this.couleurs_zones = []
     }
 
     get largeur_pixels() {
@@ -49,6 +65,23 @@ export class Carte {
         for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
             for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) this.definir(x, y, tuile)
         }
+    }
+
+    zone(x, y) {
+        if (x < 0 || y < 0 || x >= this.largeur || y >= this.hauteur) return 0
+        return this.zones[y * this.largeur + x]
+    }
+
+    definir_zone(x, y, zone) {
+        if (x < 0 || y < 0 || x >= this.largeur || y >= this.hauteur) return
+        this.zones[y * this.largeur + x] = zone
+    }
+
+    // Couleurs de sol (normale, alternée) de la tuile.
+    couleurs_sol(x, y) {
+        const zone = SOLS_COLORES ? this.zone(x, y) : 0
+        if (zone === 0) return [COULEURS.sol, COULEURS.sol_alterne]
+        return (this.couleurs_zones[zone] ??= couleurs_zone(zone))
     }
 
     est_solide(x, y) {
@@ -117,7 +150,7 @@ export class Carte {
             for (let x = x1; x <= x2; x++) {
                 if (!this.est_visible(x, y)) continue
                 if (this.est_solide(x, y)) contexte.fillStyle = COULEURS.bordure
-                else contexte.fillStyle = (x + y) % 2 === 0 ? COULEURS.sol : COULEURS.sol_alterne
+                else contexte.fillStyle = this.couleurs_sol(x, y)[(x + y) % 2]
                 const gauche = vers_ecran_x(x)
                 contexte.fillRect(gauche, haut, vers_ecran_x(x + 1) - gauche, bas - haut)
             }

@@ -2,67 +2,54 @@ import { TAILLE_TUILE } from './carte.js'
 import { borner, interpoler } from '../utilitaires/maths.js'
 
 const PARAMETRES = {
-    // Distance (tuiles) à partir de laquelle la caméra se prépare à une zone plus
-    // étroite (zoom et alignement), pour y arriver avec la vue exacte.
+    // Tuiles visibles au plus sur le grand côté de la zone d'affichage (limite du dézoom).
+    // Infinity : pas de limite.
+    tuiles_visibles_max: Infinity,
+    // Distance (tuiles, norme infinie) qu'il reste à la cible à parcourir pour être
+    // entièrement sur une tuile qui limite la vue, à partir de laquelle la vue s'y
+    // prépare (taille et alignement).
     distance_anticipation: 1,
-    // Espace minimal (tuiles) entre la cible et chaque bord de la vue. Sans marge,
-    // la vue reste collée à une pièce jusqu'à ce que la cible en sorte, puis bascule
-    // d'un coup dans le couloir.
+    // Espace minimal (tuiles) entre la cible et les bords de la vue.
     marge: 1,
-    // Écart (pixels de la carte) entre les cadrages libres de deux cases voisines
-    // au-delà duquel on considère que le cadrage libre saute : autour de ces cases, la
-    // vue se recentre sur la cible.
+    // Écart (pixels) entre les cadrages libres de deux cases voisines au-delà duquel le
+    // cadrage est considéré comme sautant : la vue s'y recentre sur la cible.
     saut_minimal: 16,
-    // Pas (pixels) de la grille des positions précalculées. Diviseur de TAILLE_TUILE :
-    // plus fin, la vue colle mieux aux murs mais le précalcul est plus long.
+    // Pas (pixels) de la grille des positions précalculées, diviseur de TAILLE_TUILE.
     pas: 8,
 }
 
-// Tolérance des calculs en virgule flottante (en tuiles).
 const EPSILON = 1e-6
 
-// Caméra qui suit une cible en dézoomant au maximum, sans jamais montrer le fond :
-// la vue ne recouvre que des tuiles dessinées (sols et murs qui les bordent).
+// Surface (tuiles) d'un cadre.
+const surface = (cadre) => (cadre.droite - cadre.gauche + 1) * (cadre.bas - cadre.haut + 1)
+
+// Caméra qui suit une cible en montrant le cadre de l'endroit où elle se trouve, sans
+// jamais montrer le fond (tuiles non dessinées). La vue a une largeur et une hauteur
+// libres, au plus celles de la vue maximale ; l'affichage la met à l'échelle de sa zone.
 //
-// La vue n'est pas forcément centrée sur la cible : c'est la plus grande vue permise
-// qui la contient avec une marge (PARAMETRES.marge) de chaque côté, placée au plus
-// près du point visé. Dans une pièce qui tient à l'écran, la vue montre ainsi toute
-// la pièce sans bouger.
+// Chaque tuile de sol a son cadre (voir etendre_cadre). Pour chaque case de la grille
+// des positions de la cible, on précalcule celui des tuiles touchées par la cible dont
+// le cadre est le plus grand : la vue en prend au plus la taille et reste entre ses
+// bords. Une tuile étroite (une porte) ne limite donc la vue qu'une fois la cible
+// entièrement dessus.
 //
-// Précalcul, pour chaque case de la grille des positions de la cible (pas de
-// PARAMETRES.pas pixels) : la plus grande largeur de vue permise pour toutes les
-// positions de la case, et les bords imposés par le fond aux vues de cette largeur
-// (par exemple les deux murs d'un couloir). Un bord qui ne vient que de l'obligation
-// de contenir la cible n'est pas retenu : il suit la cible et ne dit rien des murs.
+// La vue ne dépend que de la position de la cible. Chaque case q à une distance
+// d < D (norme infinie, t = d / D) impose :
+// - sur chaque axe, une taille qui passe géométriquement de la sienne (t = 0) à la plus
+//   grande de son voisinage (t = 1) ; la vue prend la plus petite ;
+// - au centre de la vue, une borne qui la pose contre les bords de q à t = 0, relâchée
+//   linéairement jusqu'à t = 1.
+// Ce cadrage libre peut sauter là où deux cadrages possibles sont séparés par du fond.
+// Ces endroits sont repérés au précalcul ; près d'eux, la vue passe progressivement à
+// une vue sur la cible, qui ne dépend que de sa position (voir composer).
 //
-// La vue ne dépend que de la position de la cible, jamais du chemin suivi : au même
-// endroit, elle est toujours la même. Anticipation, pour chaque case q à une
-// distance d < D (t = d / D) :
-// - largeur : q impose une largeur interpolée entre la sienne (t = 0, en y entrant)
-//   et la plus grande permise autour d'elle (t = 1), au même facteur de zoom par
-//   pixel parcouru ; la vue prend la plus petite ;
-// - position : q impose au centre de la vue un décalage par rapport au centre de la
-//   cible, celui qui pose la vue contre les bords imposés de q quand la cible y est,
-//   appliqué en entier à t = 0 et décroissant linéairement jusqu'à 0 à t = 1. Le
-//   décalage est donc réparti sur toute la distance D, et exact en entrant dans la
-//   case ; en sens inverse, la vue se recentre de même progressivement sur D.
-// Tout varie continûment avec la position de la cible.
-//
-// Ce cadrage libre peut sauter par endroits (deux cadrages possibles séparés par du
-// fond, dont l'un disparaît). Ces endroits sont repérés au précalcul : les cases dont
-// le cadrage libre diffère trop de celui d'une case voisine. Près d'eux, la vue se
-// recentre sur la cible : avec a = (distance au plus proche de ces endroits) / D,
-// bornée à 1, la vue est centrée sur le point situé à la fraction a du chemin entre le
-// centre de la cible et celui du cadrage libre. Sa largeur passe de la même façon
-// (géométriquement) de la vue centrée sur la cible à celle du cadrage libre, réduite
-// si besoin pour ne pas montrer le fond autour de ce point. À a = 0 la vue est
-// centrée sur la cible ; à a = 1 c'est le cadrage libre.
+// Le précalcul ne dépend que de la carte et de la taille des cibles : une seule caméra
+// sert à toutes les cibles de même taille, chacune suivie par un SuiviCamera.
 export class Camera {
-    constructor(carte, largeur_ecran, hauteur_ecran, largeur_cible, hauteur_cible, parametres = PARAMETRES) {
+    // Seules les proportions de la zone d'affichage (largeur_zone, hauteur_zone) comptent.
+    constructor(carte, largeur_zone, hauteur_zone, largeur_cible, hauteur_cible, parametres = PARAMETRES) {
         this.carte = carte
-        this.largeur_ecran = largeur_ecran
-        // Hauteur de la vue par pixel de largeur : la vue garde les proportions de l'écran.
-        this.proportion = hauteur_ecran / largeur_ecran
+        this.proportion = hauteur_zone / largeur_zone
         this.largeur_cible = largeur_cible
         this.hauteur_cible = hauteur_cible
         this.pas = parametres.pas
@@ -70,87 +57,113 @@ export class Camera {
         this.marge = parametres.marge * TAILLE_TUILE
         this.saut_minimal = parametres.saut_minimal
 
-        // Vue courante : coin haut gauche et taille dans la carte (pixels), et zoom
-        // (pixels de l'écran par pixel de la carte).
-        this.x = 0
-        this.y = 0
-        this.largeur = largeur_ecran
-        this.hauteur = hauteur_ecran
-        this.zoom = 1
-        // État de la dernière simulation et de la précédente (null : pas d'interpolation).
-        this.etat = null
-        this.precedente = null
+        // Jamais plus petite que la cible et sa marge, ni plus grande que la carte.
+        const echelle = parametres.tuiles_visibles_max * TAILLE_TUILE / Math.max(largeur_zone, hauteur_zone)
+        this.vue_max = {
+            largeur: Math.min(Math.max(largeur_zone * echelle, largeur_cible + 2 * this.marge), carte.largeur_pixels),
+            hauteur: Math.min(Math.max(hauteur_zone * echelle, hauteur_cible + 2 * this.marge), carte.hauteur_pixels),
+        }
 
         this.cumuler_fond()
-        this.lister_largeurs_candidates()
         this.precalculer()
     }
 
     // --- Suivi ---
 
-    // Cadre la vue sur la cible ({ x, y, largeur, hauteur }, de la taille donnée au
-    // constructeur). À appeler à chaque mise à jour, avec immediat pour cadrer sans
-    // transition à l'affichage (début de partie, téléportation). La vue ne dépend que
-    // de la position de la cible : immobile, la cible garde la même vue.
-    suivre(cible, immediat = false) {
-        const cases = this.cases_proches(cible)
-        const largeur = cases.length
-            ? Math.min(...cases.map((proche) => proche.largeur))
-            // Toute position valide de la cible appartient à une case accessible : ce
-            // repli ne sert qu'à une cible placée dans un mur.
-            : this.largeur_max(this.zone_cible(cible.x, cible.y, cible.x, cible.y))
-        const hauteur = largeur * this.proportion
-
-        const centre_cible = { x: cible.x + cible.largeur / 2, y: cible.y + cible.hauteur / 2 }
-        const libre = this.placer(cible, largeur, hauteur, this.aligner(centre_cible, cases))
-        // Liberté : distance relative au plus proche endroit où le cadrage libre saute.
+    // État de la vue pour la cible { x, y } (coin haut gauche), à interpoler puis passer
+    // à composer.
+    calculer_etat(cible) {
+        const { cases, centre_cible, centre_vise, centre_libre, largeur, hauteur } = this.cadrage_libre(cible.x, cible.y)
+        // Distance relative au plus proche endroit où le cadrage libre saute.
         let liberte = 1
         for (const proche of cases) if (this.centrage[proche.indice]) liberte = Math.min(liberte, proche.t)
+        return { centre_cible, centre_vise, centre_libre, largeur_libre: largeur, hauteur_libre: hauteur, liberte }
+    }
 
-        // État retenu pour l'affichage interpolé entre deux simulations.
-        this.etat = {
+    // Cadrage libre pour la cible de coin (x, y) : taille et centre de la vue.
+    cadrage_libre(x, y) {
+        const cible = { x, y, largeur: this.largeur_cible, hauteur: this.hauteur_cible }
+        const cases = this.cases_proches(cible)
+        const { largeur, hauteur } = cases.length
+            ? {
+                largeur: Math.min(...cases.map((proche) => proche.largeur)),
+                hauteur: Math.min(...cases.map((proche) => proche.hauteur)),
+            }
+            // Cible placée dans un mur.
+            : this.taille_vue(this.etendre_cadre(this.tuiles_occupees(x, y)))
+        const centre_cible = { x: x + cible.largeur / 2, y: y + cible.hauteur / 2 }
+        const centre_vise = this.aligner(centre_cible, cases)
+        const libre = this.placer(cible, largeur, hauteur, centre_vise)
+        return {
+            cases,
             centre_cible,
+            centre_vise,
             centre_libre: { x: libre.x + largeur / 2, y: libre.y + hauteur / 2 },
-            largeur_libre: largeur,
-            liberte,
+            largeur,
+            hauteur,
         }
-        const vue = this.composer(this.etat)
-        this.cadrer(vue.x, vue.y, vue.largeur)
-        if (immediat) this.precedente = null
     }
 
-    // Vue à partir d'un état (voir l'explication en tête de la classe).
-    composer({ centre_cible, centre_libre, largeur_libre, liberte }) {
-        // Vue centrée sur la cible : la largeur libre, réduite pour ne pas montrer le fond.
-        const largeur_sur_cible = Math.min(largeur_libre, this.largeur_centree(centre_cible.x, centre_cible.y))
+    // Vue entre la vue sur la cible (liberte = 0) et le cadrage libre (liberte = 1). La
+    // vue sur la cible prend, sur chaque axe, la taille libre réduite à la boîte de la
+    // cible, centrée sur le centre visé (continu, contrairement au cadrage libre), décalée
+    // juste assez pour contenir la cible, puis ramenée dans la boîte.
+    composer({ centre_cible, centre_vise, centre_libre, largeur_libre, hauteur_libre, liberte }) {
+        const x = centre_cible.x - this.largeur_cible / 2
+        const y = centre_cible.y - this.hauteur_cible / 2
+        // Jamais plus grande que le cadre de la case où se trouve la cible, même entre deux
+        // simulations.
+        const indice = Math.floor(y / this.pas) * this.colonnes + Math.floor(x / this.pas)
+        if (this.largeurs_max[indice]) {
+            largeur_libre = Math.min(largeur_libre, this.largeurs_max[indice])
+            hauteur_libre = Math.min(hauteur_libre, this.hauteurs_max[indice])
+        }
+        const boite = this.boite_cible(x, y)
+        // La boîte contient la cible : les deux contraintes sont compatibles.
+        const dans_boite = (centre, taille, debut, fin, debut_cible, fin_cible) => {
+            const reduite = Math.min(taille, fin - debut)
+            const sur_cible = borner(centre, fin_cible - reduite / 2, debut_cible + reduite / 2)
+            return { centre: borner(sur_cible, debut + reduite / 2, fin - reduite / 2), taille: reduite }
+        }
+        const sur_cible_x = dans_boite(centre_vise.x, largeur_libre, boite.gauche, boite.droite, x, x + this.largeur_cible)
+        const sur_cible_y = dans_boite(centre_vise.y, hauteur_libre, boite.haut, boite.bas, y, y + this.hauteur_cible)
         const centre = {
-            x: interpoler(centre_cible.x, centre_libre.x, liberte),
-            y: interpoler(centre_cible.y, centre_libre.y, liberte),
+            x: interpoler(sur_cible_x.centre, centre_libre.x, liberte),
+            y: interpoler(sur_cible_y.centre, centre_libre.y, liberte),
         }
-        const largeur_voulue = largeur_sur_cible > 0
-            ? largeur_sur_cible * (largeur_libre / largeur_sur_cible) ** liberte
-            : interpoler(largeur_sur_cible, largeur_libre, liberte)
-        const largeur = Math.min(largeur_voulue, this.largeur_centree(centre.x, centre.y))
-        return { x: centre.x - largeur / 2, y: centre.y - largeur * this.proportion / 2, largeur }
+        let largeur = sur_cible_x.taille * (largeur_libre / sur_cible_x.taille) ** liberte
+        let hauteur = sur_cible_y.taille * (hauteur_libre / sur_cible_y.taille) ** liberte
+        // Le cadrage libre peut déborder du cadre de la case, et la vue intermédiaire
+        // montrer le fond : elle est alors réduite autour de son centre.
+        const reduction = Math.min(1, this.largeur_centree(centre.x, centre.y, hauteur / largeur) / largeur)
+        largeur *= reduction
+        hauteur *= reduction
+        return { x: centre.x - largeur / 2, y: centre.y - hauteur / 2, largeur, hauteur }
     }
 
-    cadrer(x, y, largeur) {
-        this.x = x
-        this.y = y
-        this.largeur = largeur
-        this.hauteur = largeur * this.proportion
-        this.zoom = this.largeur_ecran / largeur
+    // Intersection des cadres des cases proches de la cible de coin (x, y), chacun élargi
+    // de t × (D + vue maximale) : celui de la case de la cible (t = 0) est exact, donc la
+    // boîte ne contient pas de fond ; à t = 1 il ne limite plus aucune vue contenant la
+    // cible, donc la boîte varie continûment.
+    boite_cible(x, y) {
+        const boite = { gauche: -Infinity, droite: Infinity, haut: -Infinity, bas: Infinity }
+        const elargissement_x = this.distance_anticipation + this.vue_max.largeur
+        const elargissement_y = this.distance_anticipation + this.vue_max.hauteur
+        for (const { indice, t } of this.cases_proches({ x, y })) {
+            boite.gauche = Math.max(boite.gauche, this.bords_gauche[indice] - t * elargissement_x)
+            boite.droite = Math.min(boite.droite, this.bords_droit[indice] + t * elargissement_x)
+            boite.haut = Math.max(boite.haut, this.bords_haut[indice] - t * elargissement_y)
+            boite.bas = Math.min(boite.bas, this.bords_bas[indice] + t * elargissement_y)
+        }
+        return boite
     }
 
-    // Plus grande largeur d'une vue centrée sur (x, y) qui ne recouvre aucune tuile de
-    // fond ni ne sort de la carte. Une tuile de fond est recouverte si son écart au
-    // centre est inférieur à la demi-largeur horizontalement et à la demi-hauteur
-    // verticalement : la demi-largeur maximale est donc le plus petit, parmi les
-    // tuiles de fond, de max(écart horizontal, écart vertical / proportion). Les
-    // tuiles sont parcourues en anneaux autour du centre, jusqu'à ce qu'aucune plus
-    // lointaine ne puisse faire moins.
-    largeur_centree(x, y) {
-        const { carte, proportion } = this
+    // Plus grande largeur d'une vue de proportions données centrée sur (x, y) sans fond
+    // ni sortie de la carte : le plus petit, parmi les tuiles de fond, de
+    // max(écart horizontal, écart vertical / proportion). Parcours en anneaux, arrêté
+    // quand aucune tuile plus lointaine ne peut faire moins.
+    largeur_centree(x, y, proportion) {
+        const { carte } = this
         let demi_largeur = Math.min(x, carte.largeur_pixels - x, Math.min(y, carte.hauteur_pixels - y) / proportion)
         if (demi_largeur <= 0) return 0
         const colonne = Math.floor(x / TAILLE_TUILE)
@@ -161,8 +174,9 @@ export class Camera {
             const ecart_y = Math.abs(y - (j + 0.5) * TAILLE_TUILE) - TAILLE_TUILE / 2
             demi_largeur = Math.min(demi_largeur, Math.max(0, ecart_x, ecart_y / proportion))
         }
-        // Toute tuile de l'anneau k est à au moins (k - 1) tuiles du centre sur un axe.
-        for (let k = 0; (k - 1) * TAILLE_TUILE < demi_largeur; k++) {
+        // Les tuiles de l'anneau k sont à au moins k - 1 tuiles du centre sur un axe.
+        const portee = (k) => (k - 1) * TAILLE_TUILE * Math.min(1, 1 / proportion)
+        for (let k = 0; portee(k) < demi_largeur; k++) {
             for (let d = -k; d <= k; d++) {
                 essayer(colonne + d, ligne - k)
                 if (k > 0) essayer(colonne + d, ligne + k)
@@ -175,33 +189,8 @@ export class Camera {
         return 2 * demi_largeur
     }
 
-    // --- Affichage ---
-
-    // À appeler avant chaque simulation.
-    memoriser_etat() {
-        this.precedente = this.etat
-    }
-
-    // Vue { x, y, largeur, hauteur, zoom } à afficher entre la simulation précédente
-    // (avancement 0) et la dernière (1). L'état est interpolé (les largeurs
-    // géométriquement, comme le zoom pendant l'anticipation), puis la vue en est
-    // recomposée : elle suit la cible là où elle est affichée et ne montre jamais le
-    // fond, même entre deux simulations.
-    vue_affichee(avancement) {
-        const precedente = this.precedente ?? this.etat
-        const actuel = this.etat
-        const point = (a, b) => ({ x: interpoler(a.x, b.x, avancement), y: interpoler(a.y, b.y, avancement) })
-        const { x, y, largeur } = this.composer({
-            centre_cible: point(precedente.centre_cible, actuel.centre_cible),
-            centre_libre: point(precedente.centre_libre, actuel.centre_libre),
-            largeur_libre: precedente.largeur_libre * (actuel.largeur_libre / precedente.largeur_libre) ** avancement,
-            liberte: interpoler(precedente.liberte, actuel.liberte, avancement),
-        })
-        return { x, y, largeur, hauteur: largeur * this.proportion, zoom: this.largeur_ecran / largeur }
-    }
-
-    // Cases accessibles à moins de D de la cible : { indice, t, largeur } où t = d / D
-    // et largeur est la largeur que la case impose à cette distance.
+    // Cases accessibles à moins de D de la cible : { indice, t, largeur, hauteur }, avec
+    // la taille que chacune impose à cette distance.
     cases_proches(cible) {
         const { pas, distance_anticipation: distance_max } = this
         const { x, y } = cible
@@ -215,48 +204,44 @@ export class Camera {
                 const indice = l * this.colonnes + k
                 const largeur_case = this.largeurs_max[indice]
                 if (!largeur_case) continue
-                // Distance entre la position et la case (fermée) : nulle quand on y entre.
+                const hauteur_case = this.hauteurs_max[indice]
                 const dx = Math.max(k * pas - x, 0, x - (k + 1) * pas)
                 const dy = Math.max(l * pas - y, 0, y - (l + 1) * pas)
-                const distance = Math.hypot(dx, dy)
+                // Norme infinie : sur chaque axe, la cible est à moins de D de la case.
+                const distance = Math.max(dx, dy)
                 if (distance >= distance_max) continue
                 const t = distance / distance_max
-                // Interpolation géométrique : le zoom est multiplié par le même facteur à
-                // chaque pixel parcouru. (Linéaire sur la largeur, presque tout le zoom se
-                // ferait juste avant d'entrer dans la zone, comme un saut.)
-                const voisinage = this.largeurs_voisinage[indice]
-                cases.push({ indice, t, largeur: largeur_case * (voisinage / largeur_case) ** t })
+                // Géométrique : linéaire, presque tout le changement se ferait juste
+                // avant d'entrer dans la case.
+                cases.push({
+                    indice,
+                    t,
+                    largeur: largeur_case * (this.largeurs_voisinage[indice] / largeur_case) ** t,
+                    hauteur: hauteur_case * (this.hauteurs_voisinage[indice] / hauteur_case) ** t,
+                })
             }
         }
         return cases
     }
 
-    // Centre visé pour la vue : le centre de la cible, ramené entre les bornes imposées
-    // par les cases proches.
-    //
-    // Pour un bord imposé d'une case q, la borne du centre pose la vue contre ce bord
-    // en entrant dans q (t = 0) et se relâche linéairement jusqu'à ne plus rien
-    // imposer à t = 1 : l'alignement est réparti sur toute la distance D, que l'on
-    // s'approche de q ou que l'on s'en éloigne.
+    // Centre visé : celui de la cible, ramené entre les bornes imposées par les bords des
+    // cases proches.
     aligner(centre, cases) {
         const { pas } = this
         const bornes_x = { minimum: -Infinity, maximum: Infinity }
         const bornes_y = { minimum: -Infinity, maximum: Infinity }
-        // libre : centre de la cible sur l'axe ; debut : début de la case sur l'axe ;
-        // limite : borne du centre qui pose la vue contre le bord ; sens = 1 pour une
-        // borne maximale, -1 pour une borne minimale.
+        // limite : centre qui pose la vue contre le bord ; sens : 1 pour une borne
+        // maximale, -1 pour une borne minimale.
         const resserrer = (bornes, libre, debut, taille_cible, limite, t, sens) => {
-            if (!Number.isFinite(limite)) return
-            // Centre de la cible dans la case q, au plus près de sa position actuelle.
             const dans_case = borner(libre, debut + taille_cible / 2, debut + pas + taille_cible / 2)
-            // Borne directe, relâchée linéairement vers le centre libre : juste quand la
-            // cible est en face de q, et sans effet si elle est déjà du bon côté.
             const directe = Math.max(0, sens * (libre - limite)) * t
-            // Si la cible a dépassé q du côté où le bord retient la vue (elle s'en
-            // éloigne vers l'avant), le décalage reste celui mesuré dans q, décroissant
-            // avec t, au lieu de grandir avec la distance parcourue.
+            // Cible au-delà de q, du côté où le bord retient la vue : le décalage reste
+            // celui mesuré dans q au lieu de grandir avec la distance.
             const depassement = Math.max(0, sens * (libre - dans_case)) * (1 - t)
-            const borne = limite + sens * (directe + depassement)
+            // Tend vers l'infini à t = 1 : une case qui sort de portée ne pèse plus, même
+            // quand des bornes incompatibles sont moyennées.
+            const relachement = t < 1 ? pas * t / (1 - t) : Infinity
+            const borne = limite + sens * (directe + depassement + relachement)
             if (sens > 0) bornes.maximum = Math.min(bornes.maximum, borne)
             else bornes.minimum = Math.max(bornes.minimum, borne)
         }
@@ -265,36 +250,37 @@ export class Camera {
             const debut_y = Math.floor(indice / this.colonnes) * pas
             const lc = this.largeur_cible
             const hc = this.hauteur_cible
-            // Avec la vue qu'on aura en entrant dans q, pas la vue actuelle : plus grande,
-            // celle-ci ne tiendrait pas entre les murs d'un couloir.
+            // Avec la vue qu'on aura en entrant dans q : la vue actuelle, plus grande, ne
+            // tiendrait pas entre les murs d'un couloir.
             const demi_largeur = this.largeurs_entree[indice] / 2
-            const demi_hauteur = demi_largeur * this.proportion
+            const demi_hauteur = this.hauteurs_entree[indice] / 2
             resserrer(bornes_x, centre.x, debut_x, lc, this.bords_gauche[indice] + demi_largeur, t, -1)
             resserrer(bornes_x, centre.x, debut_x, lc, this.bords_droit[indice] - demi_largeur, t, 1)
             resserrer(bornes_y, centre.y, debut_y, hc, this.bords_haut[indice] + demi_hauteur, t, -1)
             resserrer(bornes_y, centre.y, debut_y, hc, this.bords_bas[indice] - demi_hauteur, t, 1)
         }
-        // Bornes incompatibles (vue plus grande que l'espace entre deux murs) : on
-        // centre entre les deux, continu avec le cas où elles se touchent.
+        // Bornes incompatibles : on centre entre les deux.
         const ramener = (valeur, { minimum, maximum }) => minimum <= maximum
             ? borner(valeur, minimum, maximum)
             : (minimum + maximum) / 2
         return { x: ramener(centre.x, bornes_x), y: ramener(centre.y, bornes_y) }
     }
 
-    // Coin haut gauche de la vue (de taille donnée) qui contient la cible et sa marge,
-    // ne montre pas le fond, et se rapproche le plus d'une vue centrée sur le point visé.
-    // Sans position possible avec la marge (cible placée à la main contre le fond),
-    // on se contente de contenir la cible.
+    // Coin haut gauche de la vue sans fond, contenant la cible et sa marge (à défaut, la
+    // cible seule), la plus proche d'une vue centrée sur le point visé.
     placer(cible, largeur, hauteur, centre) {
-        const zone_sans_marge = { x1: cible.x, y1: cible.y, x2: cible.x + cible.largeur, y2: cible.y + cible.hauteur }
-        return this.position_proche(this.zone_cible(cible.x, cible.y, cible.x, cible.y), largeur, hauteur, centre)
-            ?? this.position_proche(zone_sans_marge, largeur, hauteur, centre)
+        const zone = { x1: cible.x, y1: cible.y, x2: cible.x + cible.largeur, y2: cible.y + cible.hauteur }
+        const zone_avec_marge = {
+            x1: zone.x1 - this.marge,
+            y1: zone.y1 - this.marge,
+            x2: zone.x2 + this.marge,
+            y2: zone.y2 + this.marge,
+        }
+        return this.position_proche(zone_avec_marge, largeur, hauteur, centre)
+            ?? this.position_proche(zone, largeur, hauteur, centre)
             ?? { x: centre.x - largeur / 2, y: centre.y - hauteur / 2 }
     }
 
-    // Coin de la vue permise contenant la zone dont le centre est le plus proche de
-    // celui donné, ou null.
     position_proche(zone, largeur, hauteur, centre) {
         const ideal_x = centre.x - largeur / 2
         const ideal_y = centre.y - hauteur / 2
@@ -312,13 +298,9 @@ export class Camera {
         return meilleure
     }
 
-    // Appelle rappel(x1, x2, y1, y2) pour chaque rectangle de positions du coin haut
-    // gauche où la vue est permise et contient la zone.
-    //
-    // Les positions possibles du bord gauche sont découpées en intervalles où la vue
-    // recouvre toujours les mêmes colonnes de tuiles (de même pour le bord haut et les
-    // lignes) : chaque paire d'intervalles est entièrement permise ou interdite, ce
-    // qu'on vérifie en son milieu.
+    // Appelle rappel(x1, x2, y1, y2) pour chaque rectangle de positions du coin où la vue
+    // est sans fond et contient la zone. Dans un intervalle de positions, la vue recouvre
+    // les mêmes tuiles : il suffit de tester son milieu.
     parcourir_vues(zone, largeur, hauteur, rappel) {
         const intervalles_x = this.intervalles(zone.x1, zone.x2, largeur)
         const intervalles_y = this.intervalles(zone.y1, zone.y2, hauteur)
@@ -330,13 +312,12 @@ export class Camera {
         }
     }
 
-    // Intervalles des positions du bord de début d'une vue de taille donnée qui
-    // contient [debut, fin], séparés aux positions où un bord de la vue passe une
-    // limite de tuile.
+    // Positions du début d'une vue de cette taille contenant [debut, fin], découpées là
+    // où un de ses bords passe une limite de tuile. Chaque borne est aussi un intervalle
+    // à elle seule : une vue de n tuiles n'est souvent permise que posée sur la grille.
     intervalles(debut, fin, taille) {
         const minimum = fin - taille
         const maximum = debut
-        // Vue plus petite que la zone à contenir : aucune position.
         if (maximum - minimum < -EPSILON) return []
         if (maximum - minimum <= EPSILON) return [[minimum, minimum]]
 
@@ -348,10 +329,6 @@ export class Camera {
         }
         bornes.sort((a, b) => a - b)
 
-        // Une borne seule est aussi un intervalle : une vue de n tuiles exactement n'est
-        // souvent permise que bords posés sur les limites de tuiles. Une vue permise à
-        // l'intérieur d'un intervalle l'est aussi à ses bornes, qui recouvrent moins de
-        // tuiles.
         const intervalles = [[bornes[0], bornes[0]]]
         let precedente = bornes[0]
         for (const borne of bornes) {
@@ -364,13 +341,11 @@ export class Camera {
 
     // --- Précalcul ---
 
-    // Somme cumulée (table intégrale) des tuiles de fond, pour tester une vue en temps
-    // constant.
+    // Tuiles de fond, et leur somme cumulée pour tester une vue en temps constant.
     cumuler_fond() {
         const { largeur, hauteur } = this.carte
         const ligne = largeur + 1
         this.cumul_fond = new Uint32Array(ligne * (hauteur + 1))
-        // 1 pour une tuile de fond.
         this.fond = new Uint8Array(largeur * hauteur)
         for (let y = 0; y < hauteur; y++) {
             for (let x = 0; x < largeur; x++) {
@@ -384,8 +359,7 @@ export class Camera {
         }
     }
 
-    // Vrai si la vue ne recouvre aucune tuile de fond et reste dans la carte. Un bord
-    // posé sur une limite de tuile ne recouvre pas la tuile suivante.
+    // Vrai si la vue reste dans la carte sans recouvrir de fond.
     est_permise(x, y, largeur, hauteur) {
         const x1 = Math.floor(x / TAILLE_TUILE + EPSILON)
         const y1 = Math.floor(y / TAILLE_TUILE + EPSILON)
@@ -397,86 +371,92 @@ export class Camera {
         return c[(y2 + 1) * ligne + x2 + 1] - c[y1 * ligne + x2 + 1] - c[(y2 + 1) * ligne + x1] + c[y1 * ligne + x1] === 0
     }
 
-    // La plus grande vue permise est toujours coincée entre deux limites de tuiles,
-    // horizontalement ou verticalement : sa largeur vaut n tuiles, ou sa hauteur
-    // vaut n tuiles. Il suffit donc de chercher parmi ces largeurs.
-    lister_largeurs_candidates() {
-        const largeurs = []
-        for (let n = 1; n <= this.carte.largeur; n++) largeurs.push(n * TAILLE_TUILE)
-        for (let n = 1; n <= this.carte.hauteur; n++) largeurs.push(n * TAILLE_TUILE / this.proportion)
-        this.largeurs_candidates = largeurs.sort((a, b) => a - b)
-    }
-
-    // Largeur maximale et bords imposés pour chaque case accessible (largeur 0 si
-    // inaccessible).
+    // Taille de vue et bords du cadre de chaque case (taille nulle si inaccessible).
     precalculer() {
         const { pas, carte } = this
         this.colonnes = Math.ceil(carte.largeur_pixels / pas)
         this.lignes = Math.ceil(carte.hauteur_pixels / pas)
         const taille = this.colonnes * this.lignes
         this.largeurs_max = new Float64Array(taille)
-        // Bords imposés aux vues de chaque case (infinis s'ils ne le sont pas).
-        this.bords_gauche = new Float64Array(taille).fill(-Infinity)
-        this.bords_droit = new Float64Array(taille).fill(Infinity)
-        this.bords_haut = new Float64Array(taille).fill(-Infinity)
-        this.bords_bas = new Float64Array(taille).fill(Infinity)
+        this.hauteurs_max = new Float64Array(taille)
+        this.bords_gauche = new Float64Array(taille)
+        this.bords_droit = new Float64Array(taille)
+        this.bords_haut = new Float64Array(taille)
+        this.bords_bas = new Float64Array(taille)
         for (let l = 0; l < this.lignes; l++) {
             for (let k = 0; k < this.colonnes; k++) {
-                const resultat = this.calculer_case(k * pas, l * pas)
-                if (!resultat) continue
+                const cadre = this.calculer_case(k * pas, l * pas)
+                if (!cadre) continue
                 const indice = l * this.colonnes + k
-                const { largeur, zone } = resultat
+                const { largeur, hauteur } = this.taille_vue(cadre)
                 this.largeurs_max[indice] = largeur
-                const bords = this.bords_imposes(zone, largeur)
-                this.bords_gauche[indice] = bords.gauche
-                this.bords_droit[indice] = bords.droit
-                this.bords_haut[indice] = bords.haut
-                this.bords_bas[indice] = bords.bas
+                this.hauteurs_max[indice] = hauteur
+                this.bords_gauche[indice] = cadre.gauche * TAILLE_TUILE
+                this.bords_droit[indice] = (cadre.droite + 1) * TAILLE_TUILE
+                this.bords_haut[indice] = cadre.haut * TAILLE_TUILE
+                this.bords_bas[indice] = (cadre.bas + 1) * TAILLE_TUILE
             }
         }
-        this.calculer_voisinages()
+        this.largeurs_voisinage = this.calculer_voisinages(this.largeurs_max)
+        this.hauteurs_voisinage = this.calculer_voisinages(this.hauteurs_max)
 
-        // Largeur de vue obtenue en entrant dans chaque case (à son coin), anticipation
-        // comprise : c'est avec elle que la case impose son alignement.
-        this.largeurs_entree = new Float64Array(taille)
-        const cases_par_indice = new Map()
+        // Taille de vue en entrant dans chaque case (la plus petite à ses quatre coins),
+        // anticipation comprise : c'est avec elle que la case impose son alignement.
+        this.largeurs_entree = new Float64Array(taille).fill(Infinity)
+        this.hauteurs_entree = new Float64Array(taille).fill(Infinity)
         for (let indice = 0; indice < taille; indice++) {
             if (!this.largeurs_max[indice]) continue
             const x = (indice % this.colonnes) * pas
             const y = Math.floor(indice / this.colonnes) * pas
-            const cases = this.cases_proches({ x, y })
-            cases_par_indice.set(indice, cases)
-            this.largeurs_entree[indice] = Math.min(...cases.map((proche) => proche.largeur))
+            for (const [dx, dy] of [[0, 0], [pas, 0], [0, pas], [pas, pas]]) {
+                for (const proche of this.cases_proches({ x: x + dx, y: y + dy })) {
+                    this.largeurs_entree[indice] = Math.min(this.largeurs_entree[indice], proche.largeur)
+                    this.hauteurs_entree[indice] = Math.min(this.hauteurs_entree[indice], proche.hauteur)
+                }
+            }
         }
-        this.reperer_sauts(cases_par_indice)
+        this.reperer_sauts()
     }
 
-    // Cadrage libre de chaque case (cible à son coin, s'il est une position valide),
-    // puis repérage des cases dont le cadrage diffère de plus de saut_minimal de celui
-    // d'une case voisine : la vue devra s'y recentrer.
-    reperer_sauts(cases_par_indice) {
+    // Marque les cases entre lesquelles le cadrage libre (cible en leur point de référence,
+    // voir point_case) saute de plus
+    // de saut_minimal. Un écart entre deux cases voisines peut venir d'un changement
+    // continu mais rapide, et un saut peut être compensé par un retour continu : dès que
+    // le cadrage change, l'intervalle est resserré par dichotomie (vers la moitié où il
+    // change le plus) jusqu'à 1/16 de pixel, où seul un vrai saut reste plus grand.
+    reperer_sauts() {
         const { colonnes, lignes, pas } = this
-        const centres_x = new Float64Array(colonnes * lignes).fill(NaN)
-        const centres_y = new Float64Array(colonnes * lignes).fill(NaN)
-        for (const [indice, cases] of cases_par_indice) {
-            const cible = {
-                x: (indice % colonnes) * pas,
-                y: Math.floor(indice / colonnes) * pas,
-                largeur: this.largeur_cible,
-                hauteur: this.hauteur_cible,
+        const valide = (x, y) => !this.carte.touche_mur({ x, y, largeur: this.largeur_cible, hauteur: this.hauteur_cible })
+        const centres = new Array(colonnes * lignes).fill(null)
+        const points = new Array(colonnes * lignes).fill(null)
+        for (let indice = 0; indice < colonnes * lignes; indice++) {
+            if (!this.largeurs_max[indice]) continue
+            points[indice] = this.point_case((indice % colonnes) * pas, Math.floor(indice / colonnes) * pas)
+            centres[indice] = this.cadrage_libre(points[indice].x, points[indice].y).centre_libre
+        }
+        const ecart = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+        const etapes = Math.ceil(Math.log2(pas * 16))
+        const saute = (a, b, centre_a, centre_b) => {
+            for (let etape = 0; etape < etapes; etape++) {
+                if (ecart(centre_a, centre_b) < EPSILON) return false
+                const milieu = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+                // Passage impossible entre les deux : on le traite comme un saut.
+                if (!valide(milieu.x, milieu.y)) return true
+                const centre_milieu = this.cadrage_libre(milieu.x, milieu.y).centre_libre
+                if (ecart(centre_a, centre_milieu) >= ecart(centre_milieu, centre_b)) {
+                    b = milieu
+                    centre_b = centre_milieu
+                } else {
+                    a = milieu
+                    centre_a = centre_milieu
+                }
             }
-            if (this.carte.touche_mur(cible)) continue
-            const largeur = this.largeurs_entree[indice]
-            const hauteur = largeur * this.proportion
-            const centre = { x: cible.x + cible.largeur / 2, y: cible.y + cible.hauteur / 2 }
-            const { x, y } = this.placer(cible, largeur, hauteur, this.aligner(centre, cases))
-            centres_x[indice] = x + largeur / 2
-            centres_y[indice] = y + hauteur / 2
+            return ecart(centre_a, centre_b) > this.saut_minimal
         }
         this.centrage = new Uint8Array(colonnes * lignes)
         const comparer = (a, b) => {
-            // NaN (case sans cadrage) : comparaison fausse, rien n'est marqué.
-            if (Math.hypot(centres_x[a] - centres_x[b], centres_y[a] - centres_y[b]) > this.saut_minimal) {
+            if (!centres[a] || !centres[b]) return
+            if (saute(points[a], points[b], centres[a], centres[b])) {
                 this.centrage[a] = 1
                 this.centrage[b] = 1
             }
@@ -490,84 +470,122 @@ export class Camera {
         }
     }
 
-    // Pour la case de coin (x, y) : { largeur, zone } avec la largeur permise pour
-    // toutes ses positions valides et la zone de la plus contraignante, ou null si aucune
-    // n'est valide. Les murs étant alignés sur la grille, les positions valides d'une
-    // case sont toute la case, ou seulement certains de ses bords ou coins : on le
-    // teste au centre, au milieu des bords et aux coins. Ne couvrir que les positions
-    // valides évite d'exiger une marge qui déborderait sur le fond.
-    calculer_case(x, y) {
-        const moitie = this.pas / 2
-        const valide = (i, j) => !this.carte.touche_mur({
-            x: x + i * moitie, y: y + j * moitie, largeur: this.largeur_cible, hauteur: this.hauteur_cible,
-        })
-        // Positions couvertes par un point de test : un bord entier pour son milieu.
-        const portee = (i) => (i === 1 ? [0, this.pas] : [i * moitie, i * moitie])
-        const zone = (i, j) => {
-            const [x1, x2] = portee(i)
-            const [y1, y2] = portee(j)
-            return this.zone_cible(x + x1, y + y1, x + x2, y + y2)
-        }
+    // Point de référence de la case de coin (x, y) : son centre, ou null si la cible ne
+    // peut pas y être. Quand les dimensions de la cible sont des multiples du pas, les
+    // murs ne bordent les positions valides que sur des limites de case : l'intérieur
+    // d'une case est entièrement valide ou entièrement invalide, et les tuiles touchées
+    // y sont les mêmes partout. (Les bords valides d'une case invalide appartiennent
+    // aussi à une case voisine valide.)
+    point_case(x, y) {
+        const point = { x: x + this.pas / 2, y: y + this.pas / 2 }
+        if (this.carte.touche_mur({ ...point, largeur: this.largeur_cible, hauteur: this.hauteur_cible })) return null
+        return point
+    }
 
-        if (valide(1, 1)) {
-            const zone_case = zone(1, 1)
-            return { largeur: this.largeur_max(zone_case), zone: zone_case }
-        }
-        let resultat = null
-        for (let j = 0; j <= 2; j++) {
-            for (let i = 0; i <= 2; i++) {
-                if (!valide(i, j)) continue
-                const zone_point = zone(i, j)
-                const largeur = this.largeur_max(zone_point)
-                // La zone retenue est celle de la position la plus contraignante : c'est
-                // elle qui impose les bords de la case.
-                if (!resultat || largeur < resultat.largeur) resultat = { largeur, zone: zone_point }
+    // Cadre de la case de coin (x, y) : le plus grand des cadres des tuiles touchées par
+    // la cible en son point de référence, ou null si elle ne peut pas y être.
+    calculer_case(x, y) {
+        const point = this.point_case(x, y)
+        if (!point) return null
+        const { gauche, haut, droite, bas } = this.tuiles_occupees(point.x, point.y)
+        let plus_grand = null
+        for (let ligne = haut; ligne <= bas; ligne++) {
+            for (let colonne = gauche; colonne <= droite; colonne++) {
+                const cadre = this.cadre_tuile(colonne, ligne)
+                if (!plus_grand || surface(cadre) > surface(plus_grand)) plus_grand = cadre
             }
         }
-        return resultat
+        return plus_grand
     }
 
-    // Limites que le fond impose aux vues permises de cette largeur contenant la zone :
-    // l'étendue couverte par l'ensemble de ces vues, côté par côté. Un côté n'est
-    // imposé que si c'est le fond qui empêche d'aller plus loin (on essaie de pousser
-    // la vue la plus avancée d'un demi-pixel) ; s'il n'y a que la zone à contenir qui
-    // retient la vue, il est infini.
-    bords_imposes(zone, largeur) {
-        const hauteur = largeur * this.proportion
-        const extremes = {
-            gauche: { valeur: Infinity }, droite: { valeur: -Infinity },
-            haut: { valeur: Infinity }, bas: { valeur: -Infinity },
+    cadre_tuile(colonne, ligne) {
+        const indice = ligne * this.carte.largeur + colonne
+        this.cadres_tuiles ??= new Map()
+        if (!this.cadres_tuiles.has(indice)) {
+            this.cadres_tuiles.set(indice, this.etendre_cadre({ gauche: colonne, droite: colonne, haut: ligne, bas: ligne }))
         }
-        const retenir = (nom, valeur, x, y, meilleure) => {
-            if (meilleure(valeur, extremes[nom].valeur)) extremes[nom] = { valeur, x, y }
-        }
-        const plus_petit = (a, b) => a < b
-        const plus_grand = (a, b) => a > b
-        this.parcourir_vues(zone, largeur, hauteur, (x1, x2, y1, y2) => {
-            const x_milieu = (x1 + x2) / 2
-            const y_milieu = (y1 + y2) / 2
-            retenir('gauche', x1, x1, y_milieu, plus_petit)
-            retenir('droite', x2, x2, y_milieu, plus_grand)
-            retenir('haut', y1, x_milieu, y1, plus_petit)
-            retenir('bas', y2, x_milieu, y2, plus_grand)
-        })
-        const { gauche, droite, haut, bas } = extremes
-        // Aucune vue (ne devrait pas arriver) : rien n'est imposé.
-        if (!Number.isFinite(gauche.valeur)) return { gauche: -Infinity, droit: Infinity, haut: -Infinity, bas: Infinity }
-        const bloquee = (x, y) => !this.est_permise(x, y, largeur, hauteur)
-        const pousse = 0.5
+        return this.cadres_tuiles.get(indice)
+    }
+
+    // Tuiles (bornes incluses) occupées par la cible de coin (x, y).
+    tuiles_occupees(x, y) {
         return {
-            gauche: bloquee(gauche.x - pousse, gauche.y) ? gauche.valeur : -Infinity,
-            droit: bloquee(droite.x + pousse, droite.y) ? droite.valeur + largeur : Infinity,
-            haut: bloquee(haut.x, haut.y - pousse) ? haut.valeur : -Infinity,
-            bas: bloquee(bas.x, bas.y + pousse) ? bas.valeur + hauteur : Infinity,
+            gauche: Math.floor(x / TAILLE_TUILE),
+            haut: Math.floor(y / TAILLE_TUILE),
+            droite: Math.ceil((x + this.largeur_cible) / TAILLE_TUILE) - 1,
+            bas: Math.ceil((y + this.hauteur_cible) / TAILLE_TUILE) - 1,
         }
     }
 
-    // Pour chaque case, la plus grande largeur permise dans un carré qui couvre toutes
-    // les positions à moins de D de la case. Maximum glissant, ligne par ligne puis
-    // colonne par colonne.
-    calculer_voisinages() {
+    // Étend le cadre (tuiles, bornes incluses) d'une tuile par côté et par tour. Les
+    // quatre côtés décident ensemble, d'après le cadre du début du tour, pour que le
+    // résultat ne dépende pas d'un ordre entre eux. Chaque côté examine la ligne juste
+    // au-delà de lui :
+    // - avec du fond (ou hors de la carte), il s'arrête sans s'étendre ;
+    // - sinon il s'étend, et s'arrête si elle contient un mur. Les extrémités de la ligne
+    //   qui prolongent un côté perpendiculaire déjà arrêté ne comptent pas : c'est le mur
+    //   de ce côté-là, qui se prolonge dans l'angle.
+    // Deux côtés voisins qui s'étendent ensemble couvrent aussi la tuile d'angle : si
+    // c'est du fond, ils s'arrêtent tous les deux sans s'étendre.
+    etendre_cadre(depart) {
+        const { carte } = this
+        const cadre = { ...depart }
+        const arrete = { haut: false, droite: false, bas: false, gauche: false }
+        const est_fond = (i, j) => i < 0 || j < 0 || i >= carte.largeur || j >= carte.hauteur || this.fond[j * carte.largeur + i] === 1
+        const COTES = {
+            haut: { horizontale: true, sens: -1, debut: 'gauche', fin: 'droite' },
+            droite: { horizontale: false, sens: 1, debut: 'haut', fin: 'bas' },
+            bas: { horizontale: true, sens: 1, debut: 'gauche', fin: 'droite' },
+            gauche: { horizontale: false, sens: -1, debut: 'haut', fin: 'bas' },
+        }
+        const ANGLES = [['haut', 'gauche'], ['haut', 'droite'], ['bas', 'gauche'], ['bas', 'droite']]
+        while (!(arrete.haut && arrete.droite && arrete.bas && arrete.gauche)) {
+            const decisions = {}
+            for (const [cote, { horizontale, sens, debut, fin }] of Object.entries(COTES)) {
+                if (arrete[cote]) continue
+                const position = cadre[cote] + sens
+                let fond = false
+                let mur = false
+                for (let k = cadre[debut]; k <= cadre[fin]; k++) {
+                    const [i, j] = horizontale ? [k, position] : [position, k]
+                    if (est_fond(i, j)) fond = true
+                    const extremite = (k === cadre[debut] && arrete[debut]) || (k === cadre[fin] && arrete[fin])
+                    if (!extremite && carte.est_solide(i, j)) mur = true
+                }
+                decisions[cote] = fond ? null : { position, mur }
+            }
+            for (const [vertical, horizontal] of ANGLES) {
+                if (!decisions[vertical] || !decisions[horizontal]) continue
+                if (est_fond(decisions[horizontal].position, decisions[vertical].position)) {
+                    decisions[vertical] = null
+                    decisions[horizontal] = null
+                }
+            }
+            for (const cote of Object.keys(COTES)) {
+                if (arrete[cote]) continue
+                const decision = decisions[cote]
+                if (!decision) {
+                    arrete[cote] = true
+                    continue
+                }
+                cadre[cote] = decision.position
+                if (decision.mur) arrete[cote] = true
+            }
+        }
+        return cadre
+    }
+
+    // Taille du cadre (pixels), réduite à la vue maximale.
+    taille_vue(cadre) {
+        return {
+            largeur: Math.min((cadre.droite - cadre.gauche + 1) * TAILLE_TUILE, this.vue_max.largeur),
+            hauteur: Math.min((cadre.bas - cadre.haut + 1) * TAILLE_TUILE, this.vue_max.hauteur),
+        }
+    }
+
+    // Maximum des valeurs dans un carré couvrant toutes les positions à moins de D de
+    // chaque case (maximum glissant par lignes puis par colonnes).
+    calculer_voisinages(valeurs) {
         const { colonnes, lignes } = this
         const rayon = Math.ceil(this.distance_anticipation / this.pas) + 1
         const par_ligne = new Float64Array(colonnes * lignes)
@@ -575,76 +593,60 @@ export class Camera {
             for (let k = 0; k < colonnes; k++) {
                 let maximum = 0
                 for (let i = Math.max(0, k - rayon); i <= Math.min(colonnes - 1, k + rayon); i++) {
-                    maximum = Math.max(maximum, this.largeurs_max[l * colonnes + i])
+                    maximum = Math.max(maximum, valeurs[l * colonnes + i])
                 }
                 par_ligne[l * colonnes + k] = maximum
             }
         }
-        this.largeurs_voisinage = new Float64Array(colonnes * lignes)
+        const voisinages = new Float64Array(colonnes * lignes)
         for (let l = 0; l < lignes; l++) {
             for (let k = 0; k < colonnes; k++) {
                 let maximum = 0
                 for (let j = Math.max(0, l - rayon); j <= Math.min(lignes - 1, l + rayon); j++) {
                     maximum = Math.max(maximum, par_ligne[j * colonnes + k])
                 }
-                this.largeurs_voisinage[l * colonnes + k] = maximum
+                voisinages[l * colonnes + k] = maximum
             }
         }
+        return voisinages
+    }
+}
+
+// Suivi d'une cible par une caméra : états de la dernière simulation et de la précédente,
+// interpolés à l'affichage.
+export class SuiviCamera {
+    constructor(camera, cible) {
+        this.camera = camera
+        this.cible = cible
+        this.etat = null
+        this.precedente = null
     }
 
-    // Rectangle couvert par la cible et sa marge pour toutes les positions de
-    // [x1, x2] × [y1, y2].
-    zone_cible(x1, y1, x2, y2) {
-        return {
-            x1: x1 - this.marge,
-            y1: y1 - this.marge,
-            x2: x2 + this.largeur_cible + this.marge,
-            y2: y2 + this.hauteur_cible + this.marge,
-        }
+    // À appeler à chaque mise à jour ; immediat supprime la transition à l'affichage.
+    suivre(immediat = false) {
+        this.etat = this.camera.calculer_etat(this.cible)
+        if (immediat) this.precedente = null
     }
 
-    // Plus grande largeur de vue permise contenant la zone, par dichotomie parmi les
-    // candidates (une vue permise reste permise en rétrécissant autour de la zone).
-    largeur_max(zone) {
-        const minimum = Math.max(zone.x2 - zone.x1, (zone.y2 - zone.y1) / this.proportion)
-        const candidates = this.largeurs_candidates
-        let debut = candidates.findIndex((largeur) => largeur >= minimum - EPSILON)
-        if (debut < 0) return minimum
-        let fin = candidates.length - 1
-        let trouvee = minimum
-        while (debut <= fin) {
-            const milieu = (debut + fin) >> 1
-            if (this.existe_vue(candidates[milieu], zone)) {
-                trouvee = candidates[milieu]
-                debut = milieu + 1
-            } else {
-                fin = milieu - 1
-            }
-        }
-        return trouvee
+    // À appeler avant chaque simulation.
+    memoriser_etat() {
+        this.precedente = this.etat
     }
 
-    // Vrai si une vue de cette largeur contenant la zone est permise. On peut faire
-    // glisser une vue permise vers le haut et la gauche jusqu'à ce que ses bords
-    // touchent une limite de tuile ou la zone : seules ces positions sont à essayer.
-    existe_vue(largeur, zone) {
-        const hauteur = largeur * this.proportion
-        const positions_x = this.positions_bord(zone.x1, zone.x2, largeur)
-        const positions_y = this.positions_bord(zone.y1, zone.y2, hauteur)
-        for (const y of positions_y) {
-            for (const x of positions_x) {
-                if (this.est_permise(x, y, largeur, hauteur)) return true
-            }
-        }
-        return false
-    }
-
-    positions_bord(debut, fin, taille) {
-        const minimum = fin - taille
-        const positions = [minimum]
-        for (let k = Math.floor(minimum / TAILLE_TUILE) + 1; k * TAILLE_TUILE <= debut; k++) {
-            positions.push(k * TAILLE_TUILE)
-        }
-        return positions
+    // Vue { x, y, largeur, hauteur } (pixels de la carte) entre la simulation précédente
+    // (avancement 0) et la dernière (1), recomposée depuis l'état interpolé.
+    vue_affichee(avancement) {
+        const precedente = this.precedente ?? this.etat
+        const actuel = this.etat
+        const point = (a, b) => ({ x: interpoler(a.x, b.x, avancement), y: interpoler(a.y, b.y, avancement) })
+        const geometrique = (a, b) => a * (b / a) ** avancement
+        return this.camera.composer({
+            centre_cible: point(precedente.centre_cible, actuel.centre_cible),
+            centre_vise: point(precedente.centre_vise, actuel.centre_vise),
+            centre_libre: point(precedente.centre_libre, actuel.centre_libre),
+            largeur_libre: geometrique(precedente.largeur_libre, actuel.largeur_libre),
+            hauteur_libre: geometrique(precedente.hauteur_libre, actuel.hauteur_libre),
+            liberte: interpoler(precedente.liberte, actuel.liberte, avancement),
+        })
     }
 }

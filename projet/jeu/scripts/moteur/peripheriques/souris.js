@@ -103,13 +103,13 @@ export class Souris {
         this.crans_en_attente[axe] = Math.max(-CRANS_EN_ATTENTE_MAX, Math.min(CRANS_EN_ATTENTE_MAX, attente + crans))
     }
 
-    // Convertit les coordonnées de la page en coordonnées de l'écran de jeu (gère le redimensionnement CSS).
+    // Coordonnées du jeu : pixels CSS depuis le coin haut gauche de l'écran.
     suivre_position(evenement) {
         if (this.est_verrouillee) return
         const cadre = this.ecran.getBoundingClientRect()
         this.position_courante = {
-            x: ((evenement.clientX - cadre.left) / cadre.width) * this.ecran.width,
-            y: ((evenement.clientY - cadre.top) / cadre.height) * this.ecran.height,
+            x: evenement.clientX - cadre.left,
+            y: evenement.clientY - cadre.top,
         }
     }
 

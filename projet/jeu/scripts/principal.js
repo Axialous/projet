@@ -4,8 +4,6 @@ import { SceneMenu } from './scenes/scene-menu.js'
 import { charger_json } from './utilitaires/json.js'
 
 const ecran = document.getElementById('ecran')
-ecran.width = CONFIGURATION.largeur
-ecran.height = CONFIGURATION.hauteur
 
 const configuration_entrees = await charger_json('/configs/entrees.json')
 
