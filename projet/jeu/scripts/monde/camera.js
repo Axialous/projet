@@ -4,7 +4,7 @@ import { borner, interpoler } from '../utilitaires/maths.js'
 const PARAMETRES = {
     // Distance (tuiles) à partir de laquelle la caméra se prépare à une zone plus
     // étroite (zoom et alignement), pour y arriver avec la vue exacte.
-    distance_anticipation: 4,
+    distance_anticipation: 1,
     // Espace minimal (tuiles) entre la cible et chaque bord de la vue. Sans marge,
     // la vue reste collée à une pièce jusqu'à ce que la cible en sorte, puis bascule
     // d'un coup dans le couloir.

@@ -8,11 +8,11 @@
         "bouton_action_s": { "type": "scalaire", "entree": "controller.button.0" },
         "bouton_action_o": { "type": "scalaire", "entree": "controller.button.2" },
 
-        "gachette_o": { "type": "scalaire", "entree": "controller.button.6" },
-        "gachette_e": { "type": "scalaire", "entree": "controller.button.7" },
-
         "bouton_arriere_o": { "type": "scalaire", "entree": "controller.button.4" },
         "bouton_arriere_e": { "type": "scalaire", "entree": "controller.button.5" },
+
+        "gachette_o": { "type": "scalaire", "entree": "controller.button.6" },
+        "gachette_e": { "type": "scalaire", "entree": "controller.button.7" },
 
         "bouton_affichage": { "type": "scalaire", "entree": "controller.button.8" },
         "bouton_menu":      { "type": "scalaire", "entree": "controller.button.9" },
